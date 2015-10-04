@@ -7,6 +7,7 @@ from django.template import Context, loader
 from django.utils import datetime_safe, six
 
 from haystack.exceptions import SearchFieldError
+from haystack.indexes import NestedSearchIndex
 from haystack.utils import get_model_ct_tuple
 
 
@@ -19,36 +20,21 @@ DATETIME_REGEX = re.compile('^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(T|
 
 # All the SearchFields variants.
 
-class SearchField(object):
-    """The base implementation of a search field."""
+class SearchFieldBase(object):
+    """The bare minimum implementation of a search field
+    shared by SearchField and NestedDocField"""
     field_type = None
 
-    def __init__(self, model_attr=None, use_template=False, template_name=None,
-                 document=False, indexed=True, stored=True, faceted=False,
-                 default=NOT_PROVIDED, null=False, index_fieldname=None,
-                 facet_class=None, boost=1.0, weight=None):
+    def __init__(self, model_attr=None, faceted=False, default=NOT_PROVIDED,
+                 index_fieldname=None, facet_class=None):
         # Track what the index thinks this field is called.
         self.instance_name = None
         self.model_attr = model_attr
-        self.use_template = use_template
-        self.template_name = template_name
-        self.document = document
-        self.indexed = indexed
-        self.stored = stored
         self.faceted = faceted
         self._default = default
-        self.null = null
-        self.index_fieldname = index_fieldname
-        self.boost = weight or boost
-        self.is_multivalued = False
-
-        # We supply the facet_class for making it easy to create a faceted
-        # field based off of this field.
         self.facet_class = facet_class
-
-        if self.facet_class is None:
-            self.facet_class = FacetCharField
-
+        self.index_fieldname = index_fieldname
+        self.is_multivalued = False
         self.set_instance_name(None)
 
     def set_instance_name(self, instance_name):
@@ -70,14 +56,7 @@ class SearchField(object):
         return self._default
 
     def prepare(self, obj):
-        """
-        Takes data from the provided object and prepares it for storage in the
-        index.
-        """
-        # Give priority to a template.
-        if self.use_template:
-            return self.prepare_template(obj)
-        elif self.model_attr is not None:
+        if self.model_attr is not None:
             # Check for `__` in the field for looking through the relation.
             attrs = self.model_attr.split('__')
             current_object = obj
@@ -112,6 +91,49 @@ class SearchField(object):
         else:
             return None
 
+    def convert(self, value):
+        """
+        Handles conversion between the data found and the type of the field.
+
+        Extending classes should override this method and provide correct
+        data coercion.
+        """
+        return value
+
+
+class SearchField(SearchFieldBase):
+    """The base implementation of a simple search field."""
+    def __init__(self, model_attr=None, use_template=False, template_name=None,
+                 document=False, indexed=True, stored=True, faceted=False,
+                 default=NOT_PROVIDED, null=False, index_fieldname=None,
+                 facet_class=None, boost=1.0, weight=None):
+        # We supply the facet_class for making it easy to create a faceted
+        # field based off of this field.
+        if facet_class is None:
+            facet_class = FacetCharField
+        super(self, SearchField).__init__(model_attr=model_attr, faceted=faceted,
+                                          default=default, index_fieldname=index_fieldname,
+                                          facet_class=facet_class)
+
+        self.use_template = use_template
+        self.template_name = template_name
+        self.document = document
+        self.indexed = indexed
+        self.stored = stored
+        self.null = null
+        self.boost = weight or boost
+
+    def prepare(self, obj):
+        """
+        Takes data from the provided object and prepares it for storage in the
+        index.
+        """
+        # Give priority to a template.
+        if self.use_template:
+            return self.prepare_template(obj)
+        else:
+            return super(self, SearchField).prepare(obj)
+
     def prepare_template(self, obj):
         """
         Flattens an object for indexing.
@@ -136,14 +158,31 @@ class SearchField(object):
         t = loader.select_template(template_names)
         return t.render(Context({'object': obj}))
 
-    def convert(self, value):
-        """
-        Handles conversion between the data found and the type of the field.
 
-        Extending classes should override this method and provide correct
-        data coercion.
-        """
-        return value
+class NestedDocField(SearchFieldBase):
+    """A field to encapsulate nested documents"""
+    field_type = 'nested'
+
+    def __init__(self, model_attr, nested_search_index, faceted=False,
+                 default=NOT_PROVIDED, index_fieldname=None, facet_class=None):
+        if not model_attr:
+            raise SearchFieldError('model_attr is required for NestedDocField!')
+        super(self, NestedDocField).__init__(model_attr=model_attr, faceted=faceted,
+                                             default=default, index_fieldname=index_fieldname,
+                                             facet_class=facet_class)
+        if not isinstance(nested_search_index, NestedSearchIndex):
+            raise SearchFieldError('nested_search_index must extend indexes.NestedSearchIndex!')
+        self.search_index = nested_search_index
+        # TODO: should facet_class be changeable or hardcoded in here?
+
+    def prepare(self, obj):
+        # by getting supplied model_attr, we should get a list of objects
+        # (possibly model instances) which are to be indexed by
+        # nested_search_index
+        obj_list = super(self, NestedDocField).prepare(obj)
+        # TODO: check if obj_list is not None, check if it is iterable!
+        # only then call nested_search_index
+        return list(self.nested_search_index.prepare_all(obj_list))
 
 
 class CharField(SearchField):

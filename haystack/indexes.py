@@ -24,6 +24,7 @@ except ImportError:
 class DeclarativeMetaclass(type):
     def __new__(cls, name, bases, attrs):
         attrs['fields'] = {}
+        attrs['nested_fields'] = {}
 
         # Inherit any fields from parent(s).
         try:
@@ -32,10 +33,9 @@ class DeclarativeMetaclass(type):
             parents.reverse()
 
             for p in parents:
-                fields = getattr(p, 'fields', None)
-
-                if fields:
-                    attrs['fields'].update(fields)
+                for attr in ('fields', 'nested_fields'):
+                    val = getattr(p, attr, {})
+                    attrs[attr].update(val)
         except NameError:
             pass
 
@@ -45,34 +45,39 @@ class DeclarativeMetaclass(type):
         for field_name, obj in attrs.items():
             # Only need to check the FacetFields.
             if hasattr(obj, 'facet_for'):
-                if not obj.facet_for in facet_fields:
+                if obj.facet_for not in facet_fields:
                     facet_fields[obj.facet_for] = []
 
                 facet_fields[obj.facet_for].append(field_name)
 
         built_fields = {}
+        nested_fields = {}
 
         for field_name, obj in attrs.items():
-            if isinstance(obj, SearchField):
+            if isinstance(obj, SearchFieldBase):
                 field = attrs[field_name]
                 field.set_instance_name(field_name)
                 built_fields[field_name] = field
 
                 # Only check non-faceted fields for the following info.
                 if not hasattr(field, 'facet_for'):
-                    if field.faceted == True:
+                    if field.faceted:
                         # If no other field is claiming this field as
                         # ``facet_for``, create a shadow ``FacetField``.
-                        if not field_name in facet_fields:
+                        if field_name not in facet_fields:
                             shadow_facet_name = get_facet_field_name(field_name)
                             shadow_facet_field = field.facet_class(facet_for=field_name)
                             shadow_facet_field.set_instance_name(shadow_facet_name)
                             built_fields[shadow_facet_name] = shadow_facet_field
 
+                if isinstance(obj, NestedDocField):
+                    nested_fields[field_name] = field
+
         attrs['fields'].update(built_fields)
+        attrs['nested_fields'].update(nested_fields)
 
         # Assigning default 'objects' query manager if it does not already exist
-        if not 'objects' in attrs:
+        if 'objects' not in attrs:
             try:
                 attrs['objects'] = SearchIndexManager(attrs['Meta'].index_label)
             except (KeyError, AttributeError):
@@ -81,7 +86,91 @@ class DeclarativeMetaclass(type):
         return super(DeclarativeMetaclass, cls).__new__(cls, name, bases, attrs)
 
 
-class SearchIndex(with_metaclass(DeclarativeMetaclass, threading.local)):
+class SearchIndexBase(with_metaclass(DeclarativeMetaclass, threading.local)):
+    """
+    Bare minimum index base class extended by SearchIndex and NestedSearchIndex
+    """
+    def __init__(self):
+        self.prepared_data = None
+        content_fields = []
+
+        self.field_map = dict()
+        for field_name, field in self.fields.items():
+            # form field map
+            self.field_map[field.index_fieldname] = field_name
+            if field.document is True:
+                content_fields.append(field_name)
+
+    def get_model(self):
+        """
+        Should return the ``Model`` class (not an instance) that the rest of the
+        ``SearchIndex`` should use.
+
+        This method is required & you must override it to return the correct class.
+        """
+        raise NotImplementedError("You must provide a 'get_model' method for the '%r' index." % self)
+
+    def get_field_weights(self):
+        """Returns a dict of fields with weight values"""
+        weights = {}
+        for field_name, field in self.fields.items():
+            if field.boost:
+                weights[field_name] = field.boost
+        return weights
+
+    def _get_backend(self, using):
+        if using is None:
+            try:
+                using = connection_router.for_write(index=self)[0]
+            except IndexError:
+                # There's no backend to handle it. Bomb out.
+                return None
+
+        return connections[using].get_backend()
+
+    def prepare(self, obj):
+        """
+        Fetches and adds/alters data before indexing.
+        """
+        self.prepared_data = {
+            ID: get_identifier(obj),
+            DJANGO_CT: get_model_ct(obj),
+            DJANGO_ID: force_text(obj.pk),
+        }
+
+        for field_name, field in self.fields.items():
+            # Use the possibly overridden name, which will default to the
+            # variable name of the field.
+            self.prepared_data[field.index_fieldname] = field.prepare(obj)
+
+            if hasattr(self, "prepare_%s" % field_name):
+                value = getattr(self, "prepare_%s" % field_name)(obj)
+                self.prepared_data[field.index_fieldname] = value
+
+        return self.prepared_data
+
+    def full_prepare(self, obj):
+        self.prepared_data = self.prepare(obj)
+
+        for field_name, field in self.fields.items():
+            # Duplicate data for faceted fields.
+            if getattr(field, 'facet_for', None):
+                source_field_name = self.fields[field.facet_for].index_fieldname
+
+                # If there's data there, leave it alone. Otherwise, populate it
+                # with whatever the related field has.
+                if self.prepared_data[field_name] is None and source_field_name in self.prepared_data:
+                    self.prepared_data[field.index_fieldname] = self.prepared_data[source_field_name]
+
+            # Remove any fields that lack a value and are ``null=True``.
+            if field.null is True:
+                if self.prepared_data[field.index_fieldname] is None:
+                    del(self.prepared_data[field.index_fieldname])
+
+        return self.prepared_data
+
+
+class SearchIndex(SearchIndexBase):
     """
     Base class for building indexes.
 
@@ -104,27 +193,10 @@ class SearchIndex(with_metaclass(DeclarativeMetaclass, threading.local)):
 
     """
     def __init__(self):
-        self.prepared_data = None
-        content_fields = []
-
-        self.field_map = dict()
-        for field_name, field in self.fields.items():
-            #form field map
-            self.field_map[field.index_fieldname] = field_name
-            if field.document is True:
-                content_fields.append(field_name)
+        super(self, SearchIndex).__init__()
 
         if not len(content_fields) == 1:
             raise SearchFieldError("The index '%s' must have one (and only one) SearchField with document=True." % self.__class__.__name__)
-
-    def get_model(self):
-        """
-        Should return the ``Model`` class (not an instance) that the rest of the
-        ``SearchIndex`` should use.
-
-        This method is required & you must override it to return the correct class.
-        """
-        raise NotImplementedError("You must provide a 'get_model' method for the '%r' index." % self)
 
     def index_queryset(self, using=None):
         """
@@ -187,70 +259,11 @@ class SearchIndex(with_metaclass(DeclarativeMetaclass, threading.local)):
         # nullable `ForeignKey` as well as what seems like other cases.
         return index_qs.filter(**extra_lookup_kwargs).order_by(model._meta.pk.name)
 
-    def prepare(self, obj):
-        """
-        Fetches and adds/alters data before indexing.
-        """
-        self.prepared_data = {
-            ID: get_identifier(obj),
-            DJANGO_CT: get_model_ct(obj),
-            DJANGO_ID: force_text(obj.pk),
-        }
-
-        for field_name, field in self.fields.items():
-            # Use the possibly overridden name, which will default to the
-            # variable name of the field.
-            self.prepared_data[field.index_fieldname] = field.prepare(obj)
-
-            if hasattr(self, "prepare_%s" % field_name):
-                value = getattr(self, "prepare_%s" % field_name)(obj)
-                self.prepared_data[field.index_fieldname] = value
-
-        return self.prepared_data
-
-    def full_prepare(self, obj):
-        self.prepared_data = self.prepare(obj)
-
-        for field_name, field in self.fields.items():
-            # Duplicate data for faceted fields.
-            if getattr(field, 'facet_for', None):
-                source_field_name = self.fields[field.facet_for].index_fieldname
-
-                # If there's data there, leave it alone. Otherwise, populate it
-                # with whatever the related field has.
-                if self.prepared_data[field_name] is None and source_field_name in self.prepared_data:
-                    self.prepared_data[field.index_fieldname] = self.prepared_data[source_field_name]
-
-            # Remove any fields that lack a value and are ``null=True``.
-            if field.null is True:
-                if self.prepared_data[field.index_fieldname] is None:
-                    del(self.prepared_data[field.index_fieldname])
-
-        return self.prepared_data
-
     def get_content_field(self):
         """Returns the field that supplies the primary document to be indexed."""
         for field_name, field in self.fields.items():
             if field.document is True:
                 return field.index_fieldname
-
-    def get_field_weights(self):
-        """Returns a dict of fields with weight values"""
-        weights = {}
-        for field_name, field in self.fields.items():
-            if field.boost:
-                weights[field_name] = field.boost
-        return weights
-
-    def _get_backend(self, using):
-        if using is None:
-            try:
-                using = connection_router.for_write(index=self)[0]
-            except IndexError:
-                # There's no backend to handle it. Bomb out.
-                return None
-
-        return connections[using].get_backend()
 
     def update(self, using=None):
         """
@@ -353,6 +366,15 @@ class SearchIndex(with_metaclass(DeclarativeMetaclass, threading.local)):
         By default, returns ``all()`` on the model's default manager.
         """
         return self.get_model()._default_manager.all()
+
+
+class NestedSearchIndex(SearchIndexBase):
+    # make sure nested search indexes are only indexed through parent indexes
+    haystack_use_for_indexing = False
+
+    def prepare_all(self, obj_list):
+        for obj in obj_list:
+            yield super(self, NestedSearchIndex).full_prepare(obj)
 
 
 class BasicSearchIndex(SearchIndex):
