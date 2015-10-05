@@ -25,13 +25,14 @@ class SearchFieldBase(object):
     field_type = None
 
     def __init__(self, model_attr=None, document=False, faceted=False, default=NOT_PROVIDED,
-                 index_fieldname=None, facet_class=None):
+                 null=False, index_fieldname=None, facet_class=None):
         # Track what the index thinks this field is called.
         self.instance_name = None
         self.model_attr = model_attr
         self.document = document
         self.faceted = faceted
         self._default = default
+        self.null = null
         self.facet_class = facet_class
         self.index_fieldname = index_fieldname
         self.is_multivalued = False
@@ -112,14 +113,13 @@ class SearchField(SearchFieldBase):
         if facet_class is None:
             facet_class = FacetCharField
         super(SearchField, self).__init__(model_attr=model_attr, document=document, faceted=faceted,
-                                          default=default, index_fieldname=index_fieldname,
-                                          facet_class=facet_class)
+                                          default=default, null=null,
+                                          index_fieldname=index_fieldname, facet_class=facet_class)
 
         self.use_template = use_template
         self.template_name = template_name
         self.indexed = indexed
         self.stored = stored
-        self.null = null
         self.boost = weight or boost
 
     def prepare(self, obj):
@@ -131,7 +131,7 @@ class SearchField(SearchFieldBase):
         if self.use_template:
             return self.prepare_template(obj)
         else:
-            return super(self, SearchField).prepare(obj)
+            return super(SearchField, self).prepare(obj)
 
     def prepare_template(self, obj):
         """
@@ -162,7 +162,7 @@ class NestedDocField(SearchFieldBase):
     """A field to encapsulate nested documents"""
     field_type = 'nested'
 
-    def __init__(self, nested_search_index, model_attr, faceted=False,
+    def __init__(self, nested_search_index_cls, model_attr, faceted=False,
                  default=NOT_PROVIDED, index_fieldname=None, facet_class=None):
         from haystack.indexes import NestedSearchIndex # avoid circular import by importing locally
 
@@ -170,11 +170,19 @@ class NestedDocField(SearchFieldBase):
             raise SearchFieldError('model_attr is required for NestedDocField!')
         super(NestedDocField, self).__init__(model_attr=model_attr, faceted=faceted,
                                              default=default, index_fieldname=index_fieldname,
+                                             document=False, null=False,
                                              facet_class=facet_class)
-        if not issubclass(nested_search_index, NestedSearchIndex):
+        if not issubclass(nested_search_index_cls, NestedSearchIndex):
             raise SearchFieldError('nested_search_index must be a subclass of indexes.NestedSearchIndex!')
-        self.nested_search_index = nested_search_index
+        self.nested_search_index_cls = nested_search_index_cls
         # TODO: should facet_class be changeable or hardcoded in here?
+
+    @property
+    def nested_search_index(self):
+        attr = '_nested_search_index'
+        if not hasattr(self, attr):
+            setattr(self, attr, self.nested_search_index_cls())
+        return getattr(self, attr)
 
     def prepare(self, obj):
         # by getting supplied model_attr, we should get a list of objects

@@ -14,6 +14,7 @@ import haystack
 from haystack.backends import BaseEngine, BaseSearchBackend, BaseSearchQuery, log_query
 from haystack.constants import DEFAULT_OPERATOR, DJANGO_CT, DJANGO_ID, ID
 from haystack.exceptions import MissingDependency, MoreLikeThisError, SkipDocument
+from haystack.fields import SearchField
 from haystack.inputs import Clean, Exact, PythonData, Raw
 from haystack.models import SearchResult
 from haystack.utils import log as logging
@@ -653,17 +654,19 @@ class ElasticsearchSearchBackend(BaseSearchBackend):
 
         for field_name, field_class in fields.items():
             field_mapping = FIELD_MAPPINGS.get(field_class.field_type, DEFAULT_FIELD_MAPPING).copy()
-            if field_class.boost != 1.0:
-                field_mapping['boost'] = field_class.boost
+            if isinstance(field_class, SearchField):
+                # do operations on simple fields
+                if field_class.boost != 1.0:
+                    field_mapping['boost'] = field_class.boost
 
-            if field_class.document is True:
-                content_field_name = field_class.index_fieldname
+                if field_class.document is True:
+                    content_field_name = field_class.index_fieldname
 
-            # Do this last to override `text` fields.
-            if field_mapping['type'] == 'string':
-                if field_class.indexed is False or hasattr(field_class, 'facet_for'):
-                    field_mapping['index'] = 'not_analyzed'
-                    del field_mapping['analyzer']
+                # Do this last to override `text` fields.
+                if field_mapping['type'] == 'string':
+                    if field_class.indexed is False or hasattr(field_class, 'facet_for'):
+                        field_mapping['index'] = 'not_analyzed'
+                        del field_mapping['analyzer']
 
             mapping[field_class.index_fieldname] = field_mapping
 
