@@ -744,6 +744,7 @@ FIELD_MAPPINGS = {
     'float':      {'type': 'float'},
     'long':       {'type': 'long'},
     'integer':    {'type': 'long'},
+    'nested':     {'type': 'nested'},
 }
 
 

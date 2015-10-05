@@ -228,61 +228,74 @@ class UnifiedIndex(object):
 
         self._built = True
 
-    def collect_fields(self, index):
-        for fieldname, field_object in index.fields.items():
-            if field_object.document is True:
-                if field_object.index_fieldname != self.document_field:
-                    raise SearchFieldError("All 'SearchIndex' classes must use the same '%s' fieldname for the 'document=True' field. Offending index is '%s'." % (self.document_field, index))
+    def _collect_one_field(self, index, fieldname, field_object):
+        """
+        Collect one field into provided storage variable (dict).
+        This is useful for putting fields of nested indexes into different
+        collection (namely, self.nested_fields).
+        """
 
-            # Stow the index_fieldname so we don't have to get it the hard way again.
-            if fieldname in self._fieldnames and field_object.index_fieldname != self._fieldnames[fieldname]:
-                # We've already seen this field in the list. Raise an exception if index_fieldname differs.
-                raise SearchFieldError("All uses of the '%s' field need to use the same 'index_fieldname' attribute." % fieldname)
+        if field_object.document is True:
+            if field_object.index_fieldname != self.document_field:
+                raise SearchFieldError("All 'SearchIndex' classes must use the same '%s' fieldname for the 'document=True' field. Offending index is '%s'." % (self.document_field, index))
 
-            self._fieldnames[fieldname] = field_object.index_fieldname
+        # Stow the index_fieldname so we don't have to get it the hard way again.
+        if fieldname in self._fieldnames and field_object.index_fieldname != self._fieldnames[fieldname]:
+            # We've already seen this field in the list. Raise an exception if index_fieldname differs.
+            raise SearchFieldError("All uses of the '%s' field need to use the same 'index_fieldname' attribute." % fieldname)
 
-            # Stow the facet_fieldname so we don't have to look that up either.
-            if hasattr(field_object, 'facet_for'):
-                if field_object.facet_for:
-                    self._facet_fieldnames[field_object.facet_for] = fieldname
-                else:
-                    self._facet_fieldnames[field_object.instance_name] = fieldname
+        self._fieldnames[fieldname] = field_object.index_fieldname
 
-            # Copy the field in so we've got a unified schema.
-            if field_object.index_fieldname not in self.fields:
+        # Stow the facet_fieldname so we don't have to look that up either.
+        if hasattr(field_object, 'facet_for'):
+            if field_object.facet_for:
+                self._facet_fieldnames[field_object.facet_for] = fieldname
+            else:
+                self._facet_fieldnames[field_object.instance_name] = fieldname
+
+        # Copy the field in so we've got a unified schema.
+        if field_object.index_fieldname not in self.fields:
+            self.fields[field_object.index_fieldname] = field_object
+            self.fields[field_object.index_fieldname] = copy.copy(field_object)
+        else:
+            # If the field types are different, we can mostly
+            # safely ignore this. The exception is ``MultiValueField``,
+            # in which case we'll use it instead, copying over the
+            # values.
+            if field_object.is_multivalued:
+                old_field = self.fields[field_object.index_fieldname]
                 self.fields[field_object.index_fieldname] = field_object
                 self.fields[field_object.index_fieldname] = copy.copy(field_object)
-            else:
-                # If the field types are different, we can mostly
-                # safely ignore this. The exception is ``MultiValueField``,
-                # in which case we'll use it instead, copying over the
-                # values.
-                if field_object.is_multivalued:
-                    old_field = self.fields[field_object.index_fieldname]
-                    self.fields[field_object.index_fieldname] = field_object
-                    self.fields[field_object.index_fieldname] = copy.copy(field_object)
 
-                    # Switch it so we don't have to dupe the remaining
-                    # checks.
-                    field_object = old_field
+                # Switch it so we don't have to dupe the remaining
+                # checks.
+                field_object = old_field
 
-                # We've already got this field in the list. Ensure that
-                # what we hand back is a superset of all options that
-                # affect the schema.
-                if field_object.indexed is True:
-                    self.fields[field_object.index_fieldname].indexed = True
+            # We've already got this field in the list. Ensure that
+            # what we hand back is a superset of all options that
+            # affect the schema.
+            if field_object.indexed is True:
+                self.fields[field_object.index_fieldname].indexed = True
 
-                if field_object.stored is True:
-                    self.fields[field_object.index_fieldname].stored = True
+            if field_object.stored is True:
+                self.fields[field_object.index_fieldname].stored = True
 
-                if field_object.faceted is True:
-                    self.fields[field_object.index_fieldname].faceted = True
+            if field_object.faceted is True:
+                self.fields[field_object.index_fieldname].faceted = True
 
-                if field_object.use_template is True:
-                    self.fields[field_object.index_fieldname].use_template = True
+            if field_object.use_template is True:
+                self.fields[field_object.index_fieldname].use_template = True
 
-                if field_object.null is True:
-                    self.fields[field_object.index_fieldname].null = True
+            if field_object.null is True:
+                self.fields[field_object.index_fieldname].null = True
+
+    def collect_fields(self, index):
+        for fieldname, field_object in index.fields.items():
+            self._collect_one_field(index, fieldname, field_object)
+            # check if this is a nested field, in that case go recursive
+            if fieldname in index.nested_fields:
+                nested_index = field_object.nested_search_index
+                self.collect_fields(nested_index)
 
     def get_indexes(self):
         if not self._built:
