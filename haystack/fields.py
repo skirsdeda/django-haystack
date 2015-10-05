@@ -7,7 +7,6 @@ from django.template import Context, loader
 from django.utils import datetime_safe, six
 
 from haystack.exceptions import SearchFieldError
-from haystack.indexes import NestedSearchIndex
 from haystack.utils import get_model_ct_tuple
 
 
@@ -25,11 +24,12 @@ class SearchFieldBase(object):
     shared by SearchField and NestedDocField"""
     field_type = None
 
-    def __init__(self, model_attr=None, faceted=False, default=NOT_PROVIDED,
+    def __init__(self, model_attr=None, document=False, faceted=False, default=NOT_PROVIDED,
                  index_fieldname=None, facet_class=None):
         # Track what the index thinks this field is called.
         self.instance_name = None
         self.model_attr = model_attr
+        self.document = document
         self.faceted = faceted
         self._default = default
         self.facet_class = facet_class
@@ -111,13 +111,12 @@ class SearchField(SearchFieldBase):
         # field based off of this field.
         if facet_class is None:
             facet_class = FacetCharField
-        super(self, SearchField).__init__(model_attr=model_attr, faceted=faceted,
+        super(SearchField, self).__init__(model_attr=model_attr, document=document, faceted=faceted,
                                           default=default, index_fieldname=index_fieldname,
                                           facet_class=facet_class)
 
         self.use_template = use_template
         self.template_name = template_name
-        self.document = document
         self.indexed = indexed
         self.stored = stored
         self.null = null
@@ -163,23 +162,25 @@ class NestedDocField(SearchFieldBase):
     """A field to encapsulate nested documents"""
     field_type = 'nested'
 
-    def __init__(self, model_attr, nested_search_index, faceted=False,
+    def __init__(self, nested_search_index, model_attr, faceted=False,
                  default=NOT_PROVIDED, index_fieldname=None, facet_class=None):
+        from haystack.indexes import NestedSearchIndex # avoid circular import by importing locally
+
         if not model_attr:
             raise SearchFieldError('model_attr is required for NestedDocField!')
-        super(self, NestedDocField).__init__(model_attr=model_attr, faceted=faceted,
+        super(NestedDocField, self).__init__(model_attr=model_attr, faceted=faceted,
                                              default=default, index_fieldname=index_fieldname,
                                              facet_class=facet_class)
-        if not isinstance(nested_search_index, NestedSearchIndex):
-            raise SearchFieldError('nested_search_index must extend indexes.NestedSearchIndex!')
-        self.search_index = nested_search_index
+        if not issubclass(nested_search_index, NestedSearchIndex):
+            raise SearchFieldError('nested_search_index must be a subclass of indexes.NestedSearchIndex!')
+        self.nested_search_index = nested_search_index
         # TODO: should facet_class be changeable or hardcoded in here?
 
     def prepare(self, obj):
         # by getting supplied model_attr, we should get a list of objects
         # (possibly model instances) which are to be indexed by
         # nested_search_index
-        obj_list = super(self, NestedDocField).prepare(obj)
+        obj_list = super(NestedDocField, self).prepare(obj)
         # TODO: check if obj_list is not None, check if it is iterable!
         # only then call nested_search_index
         return list(self.nested_search_index.prepare_all(obj_list))

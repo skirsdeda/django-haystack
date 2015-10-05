@@ -92,14 +92,14 @@ class SearchIndexBase(with_metaclass(DeclarativeMetaclass, threading.local)):
     """
     def __init__(self):
         self.prepared_data = None
-        content_fields = []
+        self.content_fields = []
 
         self.field_map = dict()
         for field_name, field in self.fields.items():
             # form field map
             self.field_map[field.index_fieldname] = field_name
             if field.document is True:
-                content_fields.append(field_name)
+                self.content_fields.append(field_name)
 
     def get_model(self):
         """
@@ -193,9 +193,9 @@ class SearchIndex(SearchIndexBase):
 
     """
     def __init__(self):
-        super(self, SearchIndex).__init__()
+        super(SearchIndex, self).__init__()
 
-        if not len(content_fields) == 1:
+        if not len(self.content_fields) == 1:
             raise SearchFieldError("The index '%s' must have one (and only one) SearchField with document=True." % self.__class__.__name__)
 
     def index_queryset(self, using=None):
@@ -374,7 +374,7 @@ class NestedSearchIndex(SearchIndexBase):
 
     def prepare_all(self, obj_list):
         for obj in obj_list:
-            yield super(self, NestedSearchIndex).full_prepare(obj)
+            yield super(NestedSearchIndex, self).full_prepare(obj)
 
 
 class BasicSearchIndex(SearchIndex):
