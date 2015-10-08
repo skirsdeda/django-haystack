@@ -42,7 +42,7 @@ class SolrSearchBackend(BaseSearchBackend):
     def __init__(self, connection_alias, **connection_options):
         super(SolrSearchBackend, self).__init__(connection_alias, **connection_options)
 
-        if not 'URL' in connection_options:
+        if 'URL' not in connection_options:
             raise ImproperlyConfigured("You must specify a 'URL' in your settings for connection '%s'." % connection_alias)
 
         self.conn = Solr(connection_options['URL'], timeout=self.timeout, **connection_options.get('KWARGS', {}))
@@ -351,8 +351,8 @@ class SolrSearchBackend(BaseSearchBackend):
         if result_class is None:
             result_class = SearchResult
 
-        if hasattr(raw_results,'stats'):
-            stats = raw_results.stats.get('stats_fields',{})
+        if hasattr(raw_results, 'stats'):
+            stats = raw_results.stats.get('stats_fields', {})
 
         if hasattr(raw_results, 'facets'):
             facets = {
@@ -430,6 +430,11 @@ class SolrSearchBackend(BaseSearchBackend):
         schema_fields = []
 
         for field_name, field_class in fields.items():
+            if field_class.field_type == 'nested':
+                # nested fields are nameless in Solr
+                # hence they do not appear in schema
+                continue
+
             field_data = {
                 'field_name': field_class.index_fieldname,
                 'type': 'text_en',
@@ -692,7 +697,7 @@ class SolrSearchQuery(BaseSearchQuery):
         self._results = results.get('results', [])
         self._hit_count = results.get('hits', 0)
         self._facet_counts = self.post_process_facets(results)
-        self._stats = results.get('stats',{})
+        self._stats = results.get('stats', {})
         self._spelling_suggestion = results.get('spelling_suggestion', None)
 
     def run_mlt(self, **kwargs):
@@ -718,3 +723,21 @@ class SolrSearchQuery(BaseSearchQuery):
 class SolrEngine(BaseEngine):
     backend = SolrSearchBackend
     query = SolrSearchQuery
+
+    def build_index_cb(self, index):
+        def rename_nested(index):
+            for fieldname, field_obj in index.nested_fields.items():
+                # rename all nested fields to _childDocuments_ for pysolr to
+                # recognize them as such
+                # only change field_obj.index_fieldname and do not touch
+                # fieldname keys in index.fields and index.nested_fields
+                # since multiple NestedDocFields in index would break that!
+                field_obj.index_fieldname = '_childDocuments_'
+                rename_nested(field_obj.nested_search_index)
+
+        rename_nested(index)
+        return index
+
+    def get_unified_index(self):
+        return super(SolrEngine, self).get_unified_index(
+            build_index_cb=self.build_index_cb)

@@ -11,9 +11,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
 from haystack.exceptions import NotHandled, SearchFieldError
+from haystack.fields import SearchField
 from haystack.utils import importlib
 from haystack.utils.app_loading import haystack_get_app_modules
-
 
 try:
     # Introduced in Python 2.7
@@ -158,7 +158,7 @@ class ConnectionRouter(object):
 
 class UnifiedIndex(object):
     # Used to collect all the indexes into a cohesive whole.
-    def __init__(self, excluded_indexes=None):
+    def __init__(self, excluded_indexes=None, build_index_cb=None):
         self._indexes = {}
         self.fields = OrderedDict()
         self._built = False
@@ -167,6 +167,8 @@ class UnifiedIndex(object):
         self.document_field = getattr(settings, 'HAYSTACK_DOCUMENT_FIELD', 'text')
         self._fieldnames = {}
         self._facet_fieldnames = {}
+        if build_index_cb:
+            self.build_index_cb = build_index_cb
 
     @property
     def indexes(self):
@@ -212,6 +214,10 @@ class UnifiedIndex(object):
             indexes = self.collect_indexes()
 
         for index in indexes:
+            # allow per-backend global index customizations
+            if hasattr(self, 'build_index_cb'):
+                index = self.build_index_cb(index)
+
             model = index.get_model()
 
             if model in self._indexes:
@@ -257,7 +263,7 @@ class UnifiedIndex(object):
         if field_object.index_fieldname not in self.fields:
             self.fields[field_object.index_fieldname] = field_object
             self.fields[field_object.index_fieldname] = copy.copy(field_object)
-        else:
+        elif isinstance(field_object, SearchField):  # only for simple fields
             # If the field types are different, we can mostly
             # safely ignore this. The exception is ``MultiValueField``,
             # in which case we'll use it instead, copying over the

@@ -114,7 +114,7 @@ class SearchIndexBase(with_metaclass(DeclarativeMetaclass, threading.local)):
         """Returns a dict of fields with weight values"""
         weights = {}
         for field_name, field in self.fields.items():
-            if field.boost:
+            if isinstance(field, SearchField) and field.boost:
                 weights[field_name] = field.boost
         return weights
 

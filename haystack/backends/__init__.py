@@ -1034,8 +1034,9 @@ class BaseEngine(object):
     def reset_queries(self):
         self.queries = []
 
-    def get_unified_index(self):
+    def get_unified_index(self, **kwargs):
         if self._index is None:
-            self._index = self.unified_index(self.options.get('EXCLUDED_INDEXES', []))
+            self._index = self.unified_index(
+                self.options.get('EXCLUDED_INDEXES', []), **kwargs)
 
         return self._index
