@@ -7,7 +7,7 @@ import threading
 import warnings
 
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.six import with_metaclass
+from django.utils.six import string_types, with_metaclass
 
 from haystack import connection_router, connections
 from haystack.constants import DEFAULT_ALIAS, DJANGO_CT, DJANGO_ID, ID, Indexable
@@ -139,13 +139,31 @@ class SearchIndexBase(with_metaclass(DeclarativeMetaclass, threading.local)):
         }
 
         for field_name, field in self.fields.items():
-            # Use the possibly overridden name, which will default to the
-            # variable name of the field.
-            self.prepared_data[field.index_fieldname] = field.prepare(obj)
-
+            # Prepare field data
+            prep_data = field.prepare(obj)
             if hasattr(self, "prepare_%s" % field_name):
-                value = getattr(self, "prepare_%s" % field_name)(obj)
-                self.prepared_data[field.index_fieldname] = value
+                prep_data = getattr(self, "prepare_%s" % field_name)(obj)
+
+            # Check if prepared_data already exists for this index_fieldname
+            # (might happen in Solr backend when two nested fields are defined
+            # in one SearchIndex). If so, prepared data can be appended to
+            # when both prepared values are iterables (except string)
+            if field.index_fieldname in self.prepared_data:
+                old_data = self.prepared_data[field.index_fieldname]
+                try:
+                    # list(str) would succeed so raise TypeError here
+                    if isinstance(old_data, string_types) or isinstance(prep_data, string_types):
+                        raise TypeError()
+                    # in case data is not iterable, TypeError will be raised by list()
+                    prep_data = list(old_data) + list(prep_data)
+                except TypeError:
+                    raise SearchFieldError(
+                        "The index '%s' must have only one SearchField with "
+                        "index_fieldname (either overriden or defined field name) "
+                        "being '%s' unless all such fields are NestedDocField."
+                        % (self.__class__.__name__, field.index_fieldname))
+
+            self.prepared_data[field.index_fieldname] = prep_data
 
         return self.prepared_data
 

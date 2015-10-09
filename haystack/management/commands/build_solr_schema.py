@@ -77,8 +77,8 @@ class Command(BaseCommand):
             url_path = u.path.rstrip('/')
             url_i = url_path.rfind('/')
             core_name = url_path[url_i+1:]
-            base_path = u.path[:url_i]
-            base_url = SplitResult(u.scheme, u.netloc, base_path, '', '')
+            core_admin_path = u.path[:url_i] + '/admin/cores'
+            base_url = SplitResult(u.scheme, u.netloc, core_admin_path, '', '')
             core_admin = SolrCoreAdmin(urlunsplit(base_url))
             core_admin.reload(core_name)
         elif options.get('filename'):

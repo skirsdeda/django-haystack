@@ -140,6 +140,10 @@
     <field name="{{ DJANGO_CT }}" type="string" indexed="true" stored="true" multiValued="false"/>
     <field name="{{ DJANGO_ID }}" type="string" indexed="true" stored="true" multiValued="false"/>
     <field name="_version_" type="long" indexed="true" stored ="true"/>
+   <!-- points to the root document of a block of nested documents. Required for nested
+      document support, may be removed otherwise
+   -->
+   <field name="_root_" type="string" indexed="true" stored="true"/>
 
     <dynamicField name="*_i"  type="int"    indexed="true"  stored="true"/>
     <dynamicField name="*_s"  type="string"  indexed="true"  stored="true"/>
