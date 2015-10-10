@@ -80,11 +80,21 @@ class SolrSearchBackend(BaseSearchBackend):
         solr_id = get_identifier(obj_or_string)
 
         try:
-            kwargs = {
-                'commit': commit,
-                'id': solr_id
-            }
-            self.conn.delete(**kwargs)
+            try:
+                kwargs = {
+                    'commit': commit,
+                    # Delete object and its children (nested objects).
+                    'q': '_root_:%s' % solr_id
+                }
+                self.conn.delete(**kwargs)
+            except SolrError as e:
+                # Might fail for legacy schemas without _root_ field or objects
+                # which haven't been reindexed since _root_ was added to schema.
+                kwargs = {
+                    'commit': commit,
+                    'id': solr_id
+                }
+                self.conn.delete(**kwargs)
         except (IOError, SolrError) as e:
             if not self.silently_fail:
                 raise
@@ -92,6 +102,12 @@ class SolrSearchBackend(BaseSearchBackend):
             self.log.error("Failed to remove document '%s' from Solr: %s", solr_id, e, exc_info=True)
 
     def clear(self, models=None, commit=True):
+        def del_q(qf, model_cts, template='%s:%s'):
+            terms = []
+            for model_ct in model_cts:
+                terms.append(template % (qf, model_ct))
+            return ' OR '.join(terms)
+
         if models is not None:
             assert isinstance(models, (list, tuple))
 
@@ -103,9 +119,15 @@ class SolrSearchBackend(BaseSearchBackend):
                 models_to_delete = []
 
                 for model in models:
-                    models_to_delete.append("%s:%s" % (DJANGO_CT, get_model_ct(model)))
+                    models_to_delete.append(get_model_ct(model))
 
-                self.conn.delete(q=" OR ".join(models_to_delete), commit=commit)
+                try:
+                    q = del_q('_root_', models_to_delete, '%s:%s.*')
+                    self.conn.delete(q=q, commit=commit)
+                except SolrError as e:
+                    # Compatibility with schemas without _root_ as in remove
+                    q = del_q(DJANGO_CT, models_to_delete)
+                    self.conn.delete(q=q, commit=commit)
 
             if commit:
                 # Run an optimize post-clear. http://wiki.apache.org/solr/FAQ#head-9aafb5d8dff5308e8ea4fcf4b71f19f029c4bb99
@@ -115,8 +137,8 @@ class SolrSearchBackend(BaseSearchBackend):
                 raise
 
             if models is not None:
-                self.log.error("Failed to clear Solr index of models '%s': %s", ','.join(models_to_delete), e,
-                               exc_info=True)
+                self.log.error("Failed to clear Solr index of models '%s': %s",
+                               ','.join(models_to_delete), e, exc_info=True)
             else:
                 self.log.error("Failed to clear Solr index: %s", e, exc_info=True)
 
