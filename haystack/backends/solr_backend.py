@@ -746,20 +746,18 @@ class SolrEngine(BaseEngine):
     backend = SolrSearchBackend
     query = SolrSearchQuery
 
-    def build_index_cb(self, index):
-        def rename_nested(index):
-            for fieldname, field_obj in index.nested_fields.items():
-                # rename all nested fields to _childDocuments_ for pysolr to
-                # recognize them as such
-                # only change field_obj.index_fieldname and do not touch
-                # fieldname keys in index.fields and index.nested_fields
-                # since multiple NestedDocFields in index would break that!
-                field_obj.index_fieldname = '_childDocuments_'
-                rename_nested(field_obj.nested_search_index)
+    def rename_nested(self, index):
+        for fieldname, field_obj in index.nested_fields.items():
+            # rename all nested fields to _childDocuments_ for pysolr to
+            # recognize them as such
+            # only change field_obj.index_fieldname and do not touch
+            # fieldname keys in index.fields and index.nested_fields
+            # since multiple NestedDocFields in index would break that!
+            field_obj.index_fieldname = '_childDocuments_'
+            self.rename_nested(field_obj.nested_search_index)
 
-        rename_nested(index)
         return index
 
     def get_unified_index(self):
         return super(SolrEngine, self).get_unified_index(
-            build_index_cb=self.build_index_cb)
+            build_index_cb=self.rename_nested)

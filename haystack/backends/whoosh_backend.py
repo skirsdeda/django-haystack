@@ -152,6 +152,10 @@ class WhooshSearchBackend(BaseSearchBackend):
         content_field_name = ''
 
         for field_name, field_class in fields.items():
+            if field_class.field_type == 'nested':
+                # nested fields are nameless in Whoosh
+                # hence they do not appear in schema
+                continue
             if field_class.is_multivalued:
                 if field_class.indexed is False:
                     schema_fields[field_class.index_fieldname] = IDLIST(stored=True, field_boost=field_class.boost)
@@ -185,6 +189,55 @@ class WhooshSearchBackend(BaseSearchBackend):
         return (content_field_name, Schema(**schema_fields))
 
     def update(self, index, iterable, commit=True):
+        def update_one(doc, writer, index, root=True):
+            # Separate nested fields (if any) out of doc dict
+            nested = {}
+            for key in index.nested_fields:
+                nested[key] = doc[key]
+                del doc[key]
+
+            # Really make sure it's unicode, because Whoosh won't have it any
+            # other way.
+            for key in doc:
+                doc[key] = self._from_python(doc[key])
+
+            # Document boosts aren't supported in Whoosh 2.5.0+.
+            if 'boost' in doc:
+                del doc['boost']
+
+            # Decide which writer method to use (add or update) since nested
+            # documents can only be added (update is not supported)
+            writer_attr = 'add_document' if nested or not root else 'update_document'
+
+            # prepare for adding nested structure
+            if nested and root:
+                # delete obj from index before adding it again
+                writer.delete_by_term(ID, doc[ID])  # FIXME: will this raise Exception if obj is not in the index??
+                writer.start_group()
+
+            try:
+                getattr(writer, writer_attr)(**doc)
+            except Exception as e:
+                if not self.silently_fail:
+                    raise
+
+                # We'll log the object identifier but won't include the actual object
+                # to avoid the possibility of that generating encoding errors while
+                # processing the log message:
+                self.log.error(u"%s while preparing object for update" % e.__class__.__name__,
+                               exc_info=True, extra={"data": {"index": index,
+                                                              "object": doc[ID]}})
+
+            # add nested documents
+            for key, nested_docs in nested.items():
+                nested_index = index.nested_fields[key].nested_search_index
+                for nested_doc in nested_docs:
+                    update_one(nested_doc, writer, nested_index, root=False)
+
+            # finish nested structure
+            if nested and root:
+                writer.end_group()
+
         if not self.setup_complete:
             self.setup()
 
@@ -196,28 +249,8 @@ class WhooshSearchBackend(BaseSearchBackend):
                 doc = index.full_prepare(obj)
             except SkipDocument:
                 self.log.debug(u"Indexing for object `%s` skipped", obj)
-            else:
-                # Really make sure it's unicode, because Whoosh won't have it any
-                # other way.
-                for key in doc:
-                    doc[key] = self._from_python(doc[key])
-
-                # Document boosts aren't supported in Whoosh 2.5.0+.
-                if 'boost' in doc:
-                    del doc['boost']
-
-                try:
-                    writer.update_document(**doc)
-                except Exception as e:
-                    if not self.silently_fail:
-                        raise
-
-                    # We'll log the object identifier but won't include the actual object
-                    # to avoid the possibility of that generating encoding errors while
-                    # processing the log message:
-                    self.log.error(u"%s while preparing object for update" % e.__class__.__name__,
-                                   exc_info=True, extra={"data": {"index": index,
-                                                                  "object": get_identifier(obj)}})
+                continue
+            update_one(doc, writer, index)
 
         if len(iterable) > 0:
             # For now, commit no matter what, as we run into locking issues otherwise.
@@ -544,7 +577,7 @@ class WhooshSearchBackend(BaseSearchBackend):
                 if narrowed_results:
                     narrowed_results.filter(recent_narrowed_results)
                 else:
-                   narrowed_results = recent_narrowed_results
+                    narrowed_results = recent_narrowed_results
 
         page_num, page_length = self.calculate_page(start_offset, end_offset)
 
