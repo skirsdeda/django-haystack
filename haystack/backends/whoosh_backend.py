@@ -230,7 +230,8 @@ class WhooshSearchBackend(BaseSearchBackend):
 
             # add nested documents
             for key, nested_docs in nested.items():
-                nested_index = index.nested_fields[key].nested_search_index
+                field_name = index.field_map[key]
+                nested_index = index.fields[field_name].nested_search_index
                 for nested_doc in nested_docs:
                     update_one(nested_doc, writer, nested_index, root=False)
 
