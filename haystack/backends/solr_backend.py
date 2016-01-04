@@ -222,7 +222,6 @@ class SolrSearchBackend(BaseSearchBackend):
                 all_range_facets[key] = range_facet
 
         if all_range_facets:
-            print(all_range_facets)
             kwargs['facet'] = 'on'
             kwargs['facet.range'] = all_range_facets.keys()
             kwargs['facet.range.other'] = 'none'
@@ -371,7 +370,6 @@ class SolrSearchBackend(BaseSearchBackend):
             stats = raw_results.stats.get('stats_fields',{})
 
         if hasattr(raw_results, 'facets'):
-            print(raw_results.facets)
             facets = {
                 'fields': raw_results.facets.get('facet_fields', {}),
                 'dates': raw_results.facets.get('facet_dates', {}),
