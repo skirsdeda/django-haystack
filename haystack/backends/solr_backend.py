@@ -660,6 +660,9 @@ class SolrSearchQuery(BaseSearchQuery):
         if self.date_facets:
             search_kwargs['date_facets'] = self.date_facets
 
+        if self.range_facets:
+            search_kwargs['range_facets'] = self.range_facets
+
         if self.distance_point:
             search_kwargs['distance_point'] = self.distance_point
 
