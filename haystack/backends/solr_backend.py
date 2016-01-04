@@ -218,6 +218,7 @@ class SolrSearchBackend(BaseSearchBackend):
                     'start': self.conn._from_python(value.get('start_date')),
                     'end': self.conn._from_python(value.get('end_date')),
                     'gap_amount': gap_string,
+                    'min_count': value.get('min_count'),
                 }
                 all_range_facets[key] = range_facet
 
@@ -230,6 +231,8 @@ class SolrSearchBackend(BaseSearchBackend):
                 kwargs["f.%s.facet.range.start" % key] = value['start']
                 kwargs["f.%s.facet.range.end" % key] = value['end']
                 kwargs["f.%s.facet.range.gap" % key] = value['gap_amount']
+                if value['min_count'] is not None:
+                    kwargs["f.%s.facet.mincount" % key] = value['min_count']
 
         if query_facets is not None:
             kwargs['facet'] = 'on'

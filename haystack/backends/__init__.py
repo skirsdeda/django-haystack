@@ -901,21 +901,25 @@ class BaseSearchQuery(object):
         field_name = connections[self._using].get_unified_index().get_facet_fieldname(field)
         self.facets[field_name] = options.copy()
 
-    def add_date_facet(self, field, start_date, end_date, gap_by, gap_amount=1):
+    def add_date_facet(self, field, start_date, end_date, gap_by, gap_amount=1,
+                       min_count=None):
         """Adds a date-based facet on a field."""
         from haystack import connections
         if not gap_by in VALID_GAPS:
             raise FacetingError("The gap_by ('%s') must be one of the following: %s." % (gap_by, ', '.join(VALID_GAPS)))
+        if min_count is not None and not isinstance(min_count, six.integer_types):
+            raise FacetingError("min_count ('%s') must be int." % min_count)
 
         details = {
             'start_date': start_date,
             'end_date': end_date,
             'gap_by': gap_by,
             'gap_amount': gap_amount,
+            'min_count': min_count,
         }
         self.date_facets[connections[self._using].get_unified_index().get_facet_fieldname(field)] = details
 
-    def add_range_facet(self, field, start, end, gap_amount=1):
+    def add_range_facet(self, field, start, end, gap_amount=1, min_count=None):
         """Add a range-based facet on a numeric field."""
         from haystack import connections
 
@@ -929,6 +933,9 @@ class BaseSearchQuery(object):
             if not isinstance(val, (float,) + six.integer_types):
                 raise FacetingError("The %s ('%s') must be int or float." % (
                                     arg, val))
+        if min_count is not None and not isinstance(min_count, six.integer_types):
+            raise FacetingError("min_count ('%s') must be int." % min_count)
+        details['min_count'] = min_count
 
         fieldname = connections[self._using].get_unified_index().get_facet_fieldname(field)
         self.range_facets[fieldname] = details
