@@ -128,7 +128,7 @@ class BaseSearchBackend(object):
         raise NotImplementedError
 
     def build_search_kwargs(self, query_string, sort_by=None, start_offset=0, end_offset=None,
-                            fields='', highlight=False, facets=None,
+                            fields='', highlight=None, facets=None,
                             date_facets=None, query_facets=None,
                             narrow_queries=None, spelling_query=None,
                             within=None, dwithin=None, distance_point=None,
@@ -450,7 +450,7 @@ class BaseSearchQuery(object):
         self.boost = {}
         self.start_offset = 0
         self.end_offset = None
-        self.highlight = False
+        self.highlight = {}
         self.facets = {}
         self.date_facets = {}
         self.query_facets = []
@@ -854,13 +854,13 @@ class BaseSearchQuery(object):
         self._more_like_this = True
         self._mlt_instance = model_instance
 
-    def add_stats_query(self,stats_field,stats_facets):
+    def add_stats_query(self, stats_field, stats_facets):
         """Adds stats and stats_facets queries for the Solr backend."""
         self.stats[stats_field] = stats_facets
 
-    def add_highlight(self):
+    def add_highlight(self, fields, params):
         """Adds highlighting to the search results."""
-        self.highlight = True
+        self.highlight[fields] = params
 
     def add_within(self, field, point_1, point_2):
         """Adds bounding box parameters to search query."""
@@ -990,7 +990,7 @@ class BaseSearchQuery(object):
         clone.order_by = self.order_by[:]
         clone.models = self.models.copy()
         clone.boost = self.boost.copy()
-        clone.highlight = self.highlight
+        clone.highlight = deepcopy(self.highlight)
         clone.stats = self.stats.copy()
         clone.facets = self.facets.copy()
         clone.date_facets = self.date_facets.copy()

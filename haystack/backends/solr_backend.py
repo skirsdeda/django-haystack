@@ -141,8 +141,34 @@ class SolrSearchBackend(BaseSearchBackend):
 
         return self._process_results(raw_results, highlight=kwargs.get('highlight'), result_class=kwargs.get('result_class', SearchResult), distance_point=kwargs.get('distance_point'))
 
+    def _highlight_kwargs(self, params, field_override=None):
+        ret = {}
+        prefix = 'hl.'
+        if field_override is not None:
+            prefix += field_override + '.'
+
+        if 'pre' in params:
+            ret[prefix+'simple.pre'] = params['pre']
+        if 'post' in params:
+            ret[prefix+'simple.post'] = params['post']
+        if 'fragment_size' in params:
+            ret[prefix+'fragsize'] = int(params['fragment_size'])
+        if 'number_of_fragments' in params:
+            ret[prefix+'snippets'] = int(params['number_of_fragments'])
+        if 'require_match' in params:
+            val = 'true' if params['require_match'] else 'false'
+            ret[prefix+'requireFieldMatch'] = val
+        if 'highlighter' in params:
+            highlighter = params['highlighter'].lower()
+            if highlighter == 'fastvector':
+                ret[prefix+'useFastVectorHighlighter'] = 'true'
+            elif highlighter == 'phrase':
+                ret[prefix+'usePhraseHighlighter'] = 'true'
+
+        return ret
+
     def build_search_kwargs(self, query_string, sort_by=None, start_offset=0, end_offset=None,
-                            fields='', highlight=False, facets=None,
+                            fields='', highlight=None, facets=None,
                             date_facets=None, query_facets=None,
                             narrow_queries=None, spelling_query=None,
                             within=None, dwithin=None, distance_point=None,
@@ -180,9 +206,38 @@ class SolrSearchBackend(BaseSearchBackend):
         if end_offset is not None:
             kwargs['rows'] = end_offset - start_offset
 
-        if highlight is True:
+        if highlight is not None:
             kwargs['hl'] = 'true'
-            kwargs['hl.fragsize'] = '200'
+            base_params = none_params = highlight.pop(None, {})
+
+            # find base params if specified with glob field names (e.g. '*')
+            per_field = []
+            for fields, params in highlight.items():
+                if '*' in fields:
+                    if not base_params:
+                        base_params = params
+                else:
+                    per_field.append(fields)
+
+            # no base_params in fields=None or glob fields, try other fields
+            while not base_params and len(per_field):
+                base_params = highlight[per_field.pop()]
+
+            # do field overrides for what is left
+            for fields in per_field:
+                for field in fields.split(','):
+                    kwargs.update(self._highlight_kwargs(highlight[fields],
+                                                         field))
+
+            # add highlight field list and base params to kwargs
+            if len(highlight):
+                kwargs['hl.fl'] = ','.join(highlight.keys())
+            if base_params:
+                kwargs.update(self._highlight_kwargs(base_params))
+
+            # reinsert none_params to keep highligh dict intact
+            if none_params:
+                highlight[None] = none_params
 
         if self.include_spelling is True:
             kwargs['spellcheck'] = 'true'
@@ -692,7 +747,7 @@ class SolrSearchQuery(BaseSearchQuery):
         self._results = results.get('results', [])
         self._hit_count = results.get('hits', 0)
         self._facet_counts = self.post_process_facets(results)
-        self._stats = results.get('stats',{})
+        self._stats = results.get('stats', {})
         self._spelling_suggestion = results.get('spelling_suggestion', None)
 
     def run_mlt(self, **kwargs):
