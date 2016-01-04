@@ -191,7 +191,7 @@ class SolrSearchBackend(BaseSearchBackend):
 
     def build_search_kwargs(self, query_string, sort_by=None, start_offset=0, end_offset=None,
                             fields='', highlight=None, facets=None,
-                            date_facets=None, query_facets=None,
+                            date_facets=None, range_facets=None, query_facets=None,
                             narrow_queries=None, spelling_query=None,
                             within=None, dwithin=None, distance_point=None,
                             models=None, limit_to_registered_models=None,
@@ -277,21 +277,37 @@ class SolrSearchBackend(BaseSearchBackend):
                 for key, value in options.items():
                     kwargs['f.%s.facet.%s' % (facet_field, key)] = self.conn._from_python(value)
 
-        if date_facets is not None:
-            kwargs['facet'] = 'on'
-            kwargs['facet.date'] = date_facets.keys()
-            kwargs['facet.date.other'] = 'none'
+        # since Solr 3.1. date facets are deprecated and range facets should be
+        # used instead. Therefore range and date facets are combined before
+        # processing.
+        all_range_facets = range_facets or {}
 
+        if date_facets is not None:
             for key, value in date_facets.items():
-                kwargs["f.%s.facet.date.start" % key] = self.conn._from_python(value.get('start_date'))
-                kwargs["f.%s.facet.date.end" % key] = self.conn._from_python(value.get('end_date'))
                 gap_by_string = value.get('gap_by').upper()
                 gap_string = "%d%s" % (value.get('gap_amount'), gap_by_string)
 
                 if value.get('gap_amount') != 1:
                     gap_string += "S"
+                gap_string = '+%s/%s' % (gap_string, gap_by_string)
 
-                kwargs["f.%s.facet.date.gap" % key] = '+%s/%s' % (gap_string, gap_by_string)
+                range_facet = {
+                    'start': self.conn._from_python(value.get('start_date')),
+                    'end': self.conn._from_python(value.get('end_date')),
+                    'gap_amount': gap_string,
+                }
+                all_range_facets[key] = range_facet
+
+        if all_range_facets:
+            print(all_range_facets)
+            kwargs['facet'] = 'on'
+            kwargs['facet.range'] = all_range_facets.keys()
+            kwargs['facet.range.other'] = 'none'
+
+            for key, value in all_range_facets.items():
+                kwargs["f.%s.facet.range.start" % key] = value['start']
+                kwargs["f.%s.facet.range.end" % key] = value['end']
+                kwargs["f.%s.facet.range.gap" % key] = value['gap_amount']
 
         if query_facets is not None:
             kwargs['facet'] = 'on'
@@ -432,9 +448,11 @@ class SolrSearchBackend(BaseSearchBackend):
             stats = raw_results.stats.get('stats_fields', {})
 
         if hasattr(raw_results, 'facets'):
+            print(raw_results.facets)
             facets = {
                 'fields': raw_results.facets.get('facet_fields', {}),
                 'dates': raw_results.facets.get('facet_dates', {}),
+                'ranges': raw_results.facets.get('facet_ranges', {}),
                 'queries': raw_results.facets.get('facet_queries', {}),
             }
 

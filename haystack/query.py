@@ -405,6 +405,12 @@ class SearchQuerySet(object):
         clone.query.add_date_facet(field, start_date, end_date, gap_by, gap_amount=gap_amount)
         return clone
 
+    def range_facet(self, field, start, end, gap_amount=1):
+        """Add faceting to a query for any numeric field by ranges"""
+        clone = self._clone()
+        clone.query.add_range_facet(field, start, end, gap_amount)
+        return clone
+
     def query_facet(self, field, query):
         """Adds faceting to a query for the provided field with a custom query."""
         clone = self._clone()
