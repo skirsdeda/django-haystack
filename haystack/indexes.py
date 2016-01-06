@@ -15,11 +15,6 @@ from haystack.fields import *
 from haystack.manager import SearchIndexManager
 from haystack.utils import get_facet_field_name, get_identifier, get_model_ct
 
-try:
-    from django.utils.encoding import force_text
-except ImportError:
-    from django.utils.encoding import force_unicode as force_text
-
 
 class DeclarativeMetaclass(type):
     def __new__(cls, name, bases, attrs):
@@ -135,7 +130,7 @@ class SearchIndexBase(with_metaclass(DeclarativeMetaclass, threading.local)):
         self.prepared_data = {
             ID: get_identifier(obj),
             DJANGO_CT: get_model_ct(obj),
-            DJANGO_ID: force_text(obj.pk),
+            DJANGO_ID: obj.pk,
         }
 
         for field_name, field in self.fields.items():
