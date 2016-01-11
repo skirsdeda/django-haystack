@@ -451,6 +451,8 @@ class BaseSearchQuery(object):
         self.start_offset = 0
         self.end_offset = None
         self.highlight = False
+        self.is_grouped = False
+        self.group_opts = {}
         self.facets = {}
         self.date_facets = {}
         self.query_facets = []
@@ -891,6 +893,12 @@ class BaseSearchQuery(object):
             'point': ensure_point(point),
         }
 
+    def group(self, field, **options):
+        """Groups query by specified field."""
+        self.is_grouped = True
+        options['field'] = field
+        self.group_opts = deepcopy(options)
+
     def add_field_facet(self, field, **options):
         """Adds a regular facet on a field."""
         from haystack import connections
@@ -991,6 +999,8 @@ class BaseSearchQuery(object):
         clone.models = self.models.copy()
         clone.boost = self.boost.copy()
         clone.highlight = self.highlight
+        clone.is_grouped = self.is_grouped
+        clone.group_opts = deepcopy(self.group_opts)
         clone.stats = self.stats.copy()
         clone.facets = self.facets.copy()
         clone.date_facets = self.date_facets.copy()

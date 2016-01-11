@@ -23,6 +23,22 @@ except ImportError:
     geopy_distance = None
 
 
+class SearchResultGroup(object):
+    def __init__(self, group_value, results, result_count):
+        self.group_value = group_value
+        self.results = results
+        self.result_count = result_count
+
+    def __iter__(self):
+        return iter(self.results)
+
+    def __getitem__(self, k):
+        return self.results[k]
+
+    def count(self):
+        return self.result_count
+
+
 # Not a Django model, but tightly tied to them and there doesn't seem to be a
 # better spot in the tree.
 class SearchResult(object):
