@@ -12,7 +12,7 @@ from haystack.backends import BaseEngine, BaseSearchBackend, BaseSearchQuery, Em
 from haystack.constants import DJANGO_CT, DJANGO_ID, ID
 from haystack.exceptions import MissingDependency, MoreLikeThisError, SkipDocument
 from haystack.inputs import Clean, Exact, PythonData, Raw
-from haystack.models import SearchResult
+from haystack.models import SearchResult, SearchResultGroup
 from haystack.utils import log as logging
 from haystack.utils import get_identifier, get_model_ct
 from haystack.utils.app_loading import haystack_get_model
@@ -161,7 +161,13 @@ class SolrSearchBackend(BaseSearchBackend):
             self.log.error("Failed to query Solr using '%s': %s", query_string, e, exc_info=True)
             raw_results = EmptyResults()
 
-        return self._process_results(raw_results, highlight=kwargs.get('highlight'), result_class=kwargs.get('result_class', SearchResult), distance_point=kwargs.get('distance_point'))
+        res_kwargs = {
+            'highlight': kwargs.get('highlight'),
+            'result_class': kwargs.get('result_class', SearchResult),
+            'distance_point': kwargs.get('distance_point'),
+            'group_field': search_kwargs.get('group.field')
+        }
+        return self._process_results(raw_results, **res_kwargs)
 
     def _highlight_kwargs(self, params, field_override=None):
         ret = {}
@@ -190,7 +196,7 @@ class SolrSearchBackend(BaseSearchBackend):
         return ret
 
     def build_search_kwargs(self, query_string, sort_by=None, start_offset=0, end_offset=None,
-                            fields='', highlight=None, facets=None,
+                            fields='', highlight=None, group=None, facets=None,
                             date_facets=None, range_facets=None, query_facets=None,
                             narrow_queries=None, spelling_query=None,
                             within=None, dwithin=None, distance_point=None,
@@ -268,6 +274,16 @@ class SolrSearchBackend(BaseSearchBackend):
 
             if spelling_query:
                 kwargs['spellcheck.q'] = spelling_query
+
+        if group is not None:
+            kwargs['group'] = 'true'
+            kwargs['group.field'] = group['field']
+            kwargs['group.ngroups'] = 'true'
+
+            if 'sort_by' in group:
+                kwargs['group.sort'] = group['sort_by']
+            if 'limit' in group:
+                kwargs['group.limit'] = int(group['limit'])
 
         if facets is not None:
             kwargs['facet'] = 'on'
@@ -435,45 +451,15 @@ class SolrSearchBackend(BaseSearchBackend):
 
         return self._process_results(raw_results, result_class=result_class)
 
-    def _process_results(self, raw_results, highlight=False, result_class=None, distance_point=None):
+    def _process_docs(self, raw_results, docs, result_class, distance_point,
+                      hits):
         from haystack import connections
+
         results = []
-        hits = raw_results.hits
-        facets = {}
-        stats = {}
-        spelling_suggestion = None
-
-        if result_class is None:
-            result_class = SearchResult
-
-        if hasattr(raw_results, 'stats'):
-            stats = raw_results.stats.get('stats_fields', {})
-
-        if hasattr(raw_results, 'facets'):
-            facets = {
-                'fields': raw_results.facets.get('facet_fields', {}),
-                'dates': raw_results.facets.get('facet_dates', {}),
-                'ranges': raw_results.facets.get('facet_ranges', {}),
-                'queries': raw_results.facets.get('facet_queries', {}),
-            }
-
-            for key in ['fields']:
-                for facet_field in facets[key]:
-                    # Convert to a two-tuple, as Solr's json format returns a list of
-                    # pairs.
-                    facets[key][facet_field] = list(zip(facets[key][facet_field][::2], facets[key][facet_field][1::2]))
-
-        if self.include_spelling is True:
-            if hasattr(raw_results, 'spellcheck'):
-                if len(raw_results.spellcheck.get('suggestions', [])):
-                    # For some reason, it's an array of pairs. Pull off the
-                    # collated result from the end.
-                    spelling_suggestion = raw_results.spellcheck.get('suggestions')[-1]
-
         unified_index = connections[self.connection_alias].get_unified_index()
         indexed_models = unified_index.get_indexed_models()
 
-        for raw_result in raw_results.docs:
+        for raw_result in docs:
             app_label, model_name = raw_result[DJANGO_CT].split('.')
             additional_fields = {}
             model = haystack_get_model(app_label, model_name)
@@ -512,6 +498,61 @@ class SolrSearchBackend(BaseSearchBackend):
                 results.append(result)
             else:
                 hits -= 1
+
+        return results, hits
+
+    def _process_results(self, raw_results, highlight=False, result_class=None,
+                         distance_point=None, group_field=None):
+        hits = raw_results.hits
+        facets = {}
+        stats = {}
+        spelling_suggestion = None
+
+        if result_class is None:
+            result_class = SearchResult
+
+        if hasattr(raw_results,'stats'):
+            stats = raw_results.stats.get('stats_fields',{})
+
+        if hasattr(raw_results, 'facets'):
+            facets = {
+                'fields': raw_results.facets.get('facet_fields', {}),
+                'dates': raw_results.facets.get('facet_dates', {}),
+                'ranges': raw_results.facets.get('facet_ranges', {}),
+                'queries': raw_results.facets.get('facet_queries', {}),
+            }
+
+            for key in ['fields']:
+                for facet_field in facets[key]:
+                    # Convert to a two-tuple, as Solr's json format returns a list of
+                    # pairs.
+                    facets[key][facet_field] = list(zip(facets[key][facet_field][::2], facets[key][facet_field][1::2]))
+
+        if self.include_spelling is True:
+            if hasattr(raw_results, 'spellcheck'):
+                if len(raw_results.spellcheck.get('suggestions', [])):
+                    # For some reason, it's an array of pairs. Pull off the
+                    # collated result from the end.
+                    spelling_suggestion = raw_results.spellcheck.get('suggestions')[-1]
+
+        if group_field is not None and hasattr(raw_results, 'grouped'):
+            grouped = raw_results.grouped[group_field]
+            hits = grouped['ngroups']
+            results = []
+            for group in grouped['groups']:
+                doc_list = group['doclist']
+                group_docs, group_hits = self._process_docs(raw_results,
+                                                            doc_list['docs'],
+                                                            result_class,
+                                                            distance_point,
+                                                            doc_list['numFound'])
+                result_group = SearchResultGroup(group['groupValue'],
+                                                 group_docs, group_hits)
+                results.append(result_group)
+        else:
+            results, hits = self._process_docs(raw_results, raw_results.docs,
+                                               result_class, distance_point,
+                                               hits)
 
         return {
             'results': results,
@@ -721,24 +762,25 @@ class SolrSearchQuery(BaseSearchQuery):
 
         return u'_query_:"{!%s %s}%s"' % (parser_name, Clean(' '.join(kwarg_bits)), query_string)
 
+    def _order_by(self, order_by):
+        """Converts Django style order_by to a Solr sort string"""
+        ret = []
+        for f in order_by:
+            if f.startswith('-'):
+                ret.append('%s desc' % f[1:])
+            else:
+                ret.append('%s asc' % f)
+
+        return ','.join(ret)
+
     def build_params(self, spelling_query=None, **kwargs):
         search_kwargs = {
             'start_offset': self.start_offset,
             'result_class': self.result_class
         }
-        order_by_list = None
 
         if self.order_by:
-            if order_by_list is None:
-                order_by_list = []
-
-            for order_by in self.order_by:
-                if order_by.startswith('-'):
-                    order_by_list.append('%s desc' % order_by[1:])
-                else:
-                    order_by_list.append('%s asc' % order_by)
-
-            search_kwargs['sort_by'] = ", ".join(order_by_list)
+            search_kwargs['sort_by'] = self._order_by(self.order_by)
 
         if self.date_facets:
             search_kwargs['date_facets'] = self.date_facets
@@ -754,6 +796,13 @@ class SolrSearchQuery(BaseSearchQuery):
 
         if self.end_offset is not None:
             search_kwargs['end_offset'] = self.end_offset
+
+        if self.is_grouped:
+            group = self.group_opts
+            # convert order_by to solr representation
+            if 'order_by' in group and group['order_by']:
+                group['sort_by'] = self._order_by(group['order_by'])
+            search_kwargs['group'] = group
 
         if self.facets:
             search_kwargs['facets'] = self.facets

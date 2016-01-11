@@ -38,6 +38,7 @@ class SearchQuerySet(object):
         self._cache_full = False
         self._load_all = False
         self._ignored_result_count = 0
+        self._is_grouped = False
         self.log = logging.getLogger('haystack')
 
     def _determine_backend(self):
@@ -190,7 +191,14 @@ class SearchQuerySet(object):
         return True
 
     def post_process_results(self, results):
-        to_cache = []
+        from itertools import chain
+
+        # When queryset is grouped, it iterates through groups instead of results
+        # make iterator of actual results here
+        if self._is_grouped:
+            res_iter = chain(*(iter(r) for r in results))
+        else:
+            res_iter = results
 
         # Check if we wish to load all objects.
         if self._load_all:
@@ -198,7 +206,7 @@ class SearchQuerySet(object):
             loaded_objects = {}
 
             # Remember the search position for each result so we don't have to resort later.
-            for result in results:
+            for result in res_iter:
                 models_pks.setdefault(result.model, []).append(result.pk)
 
             # Load the objects for each model in turn.
@@ -213,7 +221,7 @@ class SearchQuerySet(object):
                     # Revert to old behaviour
                     loaded_objects[model] = model._default_manager.in_bulk(models_pks[model])
 
-        for result in results:
+        for result in res_iter:
             if self._load_all:
                 # We have to deal with integer keys being cast from strings
                 model_objects = loaded_objects.get(result.model, {})
@@ -230,9 +238,9 @@ class SearchQuerySet(object):
                     self._ignored_result_count += 1
                     continue
 
-            to_cache.append(result)
-
-        return to_cache
+        # this method only modifies results themselves, not the result list
+        # no need to create another list!
+        return results
 
     def __getitem__(self, k):
         """
@@ -353,6 +361,17 @@ class SearchQuerySet(object):
         """Boosts a certain aspect of the query."""
         clone = self._clone()
         clone.query.add_boost(term, boost)
+        return clone
+
+    def group(self, field, **options):
+        """Groups query by a specified field. Groups of results will be
+        returned instead of results"""
+        if self._is_grouped:
+            warnings.warn('Calling group on an already grouped query '
+                          'overrides previous grouping settings')
+        clone = self._clone()
+        clone._is_grouped = True
+        clone.query.group(field, **options)
         return clone
 
     def facet(self, field, **options):
@@ -585,6 +604,7 @@ class SearchQuerySet(object):
         query = self.query._clone()
         clone = klass(query=query)
         clone._load_all = self._load_all
+        clone._is_grouped = self._is_grouped
         return clone
 
 
@@ -615,7 +635,9 @@ class EmptySearchQuerySet(SearchQuerySet):
 class ValuesListSearchQuerySet(SearchQuerySet):
     """
     A ``SearchQuerySet`` which returns a list of field values as tuples, exactly
-    like Django's ``ValuesListQuerySet``.
+    like Django's ``ValuesListQuerySet``. However, when ``SearchQuerySet`` is
+    grouped, list of groups (and their grouped results) is returned instead
+    ([(group_val, [(field1, field2, ..), (field1, field2, ..), ..]), ..]).
     """
     def __init__(self, *args, **kwargs):
         super(ValuesListSearchQuerySet, self).__init__(*args, **kwargs)
@@ -641,41 +663,36 @@ class ValuesListSearchQuerySet(SearchQuerySet):
         }
         return super(ValuesListSearchQuerySet, self)._fill_cache(start, end, **kwargs)
 
-    def post_process_results(self, results):
-        to_cache = []
-
+    def _values(self, results):
+        ret = []
         if self._flat:
-            accum = to_cache.extend
+            accum = ret.extend
         else:
-            accum = to_cache.append
+            accum = ret.append
 
         for result in results:
             accum([getattr(result, i, None) for i in self._fields])
+        return ret
 
-        return to_cache
+    def post_process_results(self, results):
+        if self._is_grouped:
+            return [(g.group_value, self._values(g)) for g in results]
+        else:
+            return self._values(results)
 
 
 class ValuesSearchQuerySet(ValuesListSearchQuerySet):
     """
     A ``SearchQuerySet`` which returns a list of dictionaries, each containing
     the key/value pairs for the result, exactly like Django's
-    ``ValuesQuerySet``.
+    ``ValuesQuerySet``. When ``SearchQuerySet`` is grouped, list of tuples
+    (<group_value>, <list of result dicts>) is returned.
     """
-    def _fill_cache(self, start, end):
-        query_fields = set(self._internal_fields)
-        query_fields.update(self._fields)
-        kwargs = {
-            'fields': query_fields
-        }
-        return super(ValuesListSearchQuerySet, self)._fill_cache(start, end, **kwargs)
-
-    def post_process_results(self, results):
-        to_cache = []
-
-        for result in results:
-            to_cache.append(dict((i, getattr(result, i, None)) for i in self._fields))
-
-        return to_cache
+    def _values(self, results):
+        ret = []
+        for r in results:
+            ret.append(dict((i, getattr(r, i, None)) for i in self._fields))
+        return ret
 
 
 class RelatedSearchQuerySet(SearchQuerySet):
