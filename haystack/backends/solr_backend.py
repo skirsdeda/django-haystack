@@ -145,7 +145,7 @@ class SolrSearchBackend(BaseSearchBackend):
         ret = {}
         prefix = 'hl.'
         if field_override is not None:
-            prefix += field_override + '.'
+            prefix = 'f.%s.%s' % (field_override, prefix)
 
         if 'pre' in params:
             ret[prefix+'simple.pre'] = params['pre']
