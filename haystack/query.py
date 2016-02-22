@@ -327,12 +327,16 @@ class SearchQuerySet(object):
 
         return clone
 
-    def highlight(self, fields=None, **kwargs):
+    def highlight(self, *fields, **kwargs):
         """Adds highlighting to the results."""
         clone = self._clone()
         # TODO: fields validation (must be either None, '*', field name or comma
         # separated field names
-        clone.query.add_highlight(fields, kwargs)
+        if not len(fields):
+            fields_id = None
+        else:
+            fields_id = ','.join(fields)
+        clone.query.add_highlight(fields_id, kwargs)
         return clone
 
     def models(self, *models):
