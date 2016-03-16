@@ -104,6 +104,7 @@ class Command(BaseCommand):
 
         content_field_name, fields = self.backend.build_schema(
             self.connection.get_unified_index().all_searchfields())
+        fields = sorted(fields, key=lambda f: f['field_name'])
         return Context({
             'solr_info': self.solr_info,
             'solr_version': solr_version,
